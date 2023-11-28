@@ -3,10 +3,10 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 4 #64
-block_size = 8 #256
-n_embd = 32 #384
-n_heads = 6
+batch_size = 32 #4 #64
+block_size = 10 #8 #256
+n_embd = 512 #32 #384
+n_heads = 8 #4 #6
 #head_size = 16
 n_layers = 6
 dropout = 0.2
@@ -71,7 +71,7 @@ def estimate_loss():
         out[split] = losses.mean()
     model.train()
     return out
-
+"""
 # one head of self-attention
 class SelfAttentionHead(nn.Module):
 
@@ -90,17 +90,65 @@ class SelfAttentionHead(nn.Module):
         v = self.value(x)
 
         # compute the "affinities"
-        wei = q @ k.transpose(-2, -1) * (C**-0.5) # (B, T, head_size) @ (B, head_size, T) -> (B,T,T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1)
-        #wei = self.dropout(wei)
+        affn = q @ k.transpose(-2, -1) * (C**-0.5) # (B, T, head_size) @ (B, head_size, T) -> (B,T,T)
+        affn = affn.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        affn = F.softmax(affn, dim=-1)
+        #affn = self.dropout(affn)
         
         # weight aggregation
-        out = wei @ v # (B,T,T) @ (B,T,head_size) -> (B,T,head_size)
+        out = affn @ v # (B,T,T) @ (B,T,head_size) -> (B,T,head_size)
 
         return out
+"""
+# trying to make multi-head class without having to do a self-attention class, so treating heads as a dim
+class MultiHeadAttention_attempt(nn.Module):
+
+    def __init__(self, head_size, n_heads):
+        super().__init__()
+        assert n_embd % n_heads == 0
+        self.heads = n_heads # maybe I don't need this, since n_heads is global
+        self.Wk = nn.Linear(n_embd, head_size, bias=False) # (32, 16)
+        self.Wq = nn.Linear(n_embd, head_size, bias=False)
+        self.Wv = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+        # residual connections and dropout for efficiency
+        self.skip_connection = nn.Linear(head_size * n_heads, n_embd) 
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # self-attention
+        B,T,C = x.shape
+        k = self.Wk(x) # (B,T,C) @ (32, 16) -> (B,T,16)
+        q = self.Wq(x)
+        v = self.Wv(x)
+        print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}")
+
+        # splitting k,q,v into their heads changing their shapes
+        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (B,T,heads,C) -> (B,heads,T,C)
+        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
+        v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
+
+        # (B,n_heads,T,C) @ (B,n_heads,C,T) -> (B,n_heads,T,T)
+        affinities = q @ k.transpose(-2, -1) * (C**-0.5) # C**-0.5 = math.sqrt(C)
+        affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
+        affinities = F.softmax(affinities, dim=-1)
+        affinities = self.dropout(affinities)
+
+        # weight aggregation with values
+        aggregation = affinities @ v
+
+        # reshape back 
+        aggregation = aggregation.transpose(-3, -2).view(B, -1, self.heads*C)
+
+        # residual connection and dropout
+        aggregation = self.skip_connection(aggregation)
+        aggregation = self.dropout(aggregation)
+
+        return aggregation
 
 # multiple self-attention heads
+"""
 class MultiHeadAttention(nn.Module):
 
     def __init__(self, n_heads, head_size): # (head_size)
@@ -114,7 +162,7 @@ class MultiHeadAttention(nn.Module):
         #out = self.proj(out)
         #out = self.dropout(out)
         return out
-
+"""
 # Feed Forward class
 class FeedForward(nn.Module):
 
@@ -124,13 +172,12 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
             nn.Linear(4*n_embd, n_embd),
-            #nn.Dropout(dropout)
+            nn.Dropout(dropout)
         )
 
     def forward(self, x):
         out = self.net(x)
         return out
-
 
 # communication and computation
 class TransformerBlock(nn.Module):
@@ -138,17 +185,17 @@ class TransformerBlock(nn.Module):
     def __init__(self, n_embd, n_heads): # n_embd, n_heads
         super().__init__()
         head_size = n_embd // n_heads
-        self.self_attention = MultiHeadAttention(n_heads, head_size)
+       #self.self_attention = MultiHeadAttention(n_heads, head_size)
+        self.attention = MultiHeadAttention_attempt(head_size, n_heads)
         self.feedforward = FeedForward(n_embd)
         self.layernorm1 = nn.LayerNorm(n_embd)
         self.layernorm2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        residual = x 
-        out = residual + self.self_attention(self.layernorm1(x))
-        out = residual + self.feedforward(self.layernorm2(x))
+        #residual = x 
+        out = x + self.attention(self.layernorm1(x))
+        out = x + self.feedforward(self.layernorm2(x))
         return out
-
 
 class GPT(nn.Module):
 
@@ -174,7 +221,6 @@ class GPT(nn.Module):
 
     def forward(self, index, targets=None):
         B,T = index.shape
-
         token_embeddings = self.token_embedding_table(index) # (B,T,C)
         positional_embeddings = self.positional_embedding_table(torch.arange(T, device=device)) # T: block_size
         emb = token_embeddings + positional_embeddings # (B,T,C)
