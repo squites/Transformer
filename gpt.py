@@ -237,8 +237,7 @@ class GPT(nn.Module):
         token_embeddings = self.token_embedding_table(index) # (B,T,C)
         positional_embeddings = self.positional_embedding_table(torch.arange(T, device=device)) # T: block_size
         emb = token_embeddings + positional_embeddings # (B,T,C)
-        #x = self.blocks(emb) # (B,T,C)
-        x = self.single_block(emb)
+        x = self.blocks(emb) # (B,T,C)
         x = self.final_layernorm(x) # (B,T,C)
         logits = self.softmax(x) # (B,T,vocab_size)
 
