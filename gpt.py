@@ -136,13 +136,13 @@ class MultiHeadAttention_attempt(nn.Module):
 
     def forward(self, x):
         # self-attention
-        print(f"x shape inside MultiHead: {x.shape}") # (32,10,512) #(DEBUG)
+        #print(f"x shape inside MultiHead: {x.shape}") # (32,10,512) #(DEBUG)
         #(DEBUG)print(f"Wk shape: {self.Wk}")
         B,T,C = x.shape # B:32, T:10, C:512 #B:64, T:256, C:384
         k = self.Wk(x) # (32,10,512) @ (512, 64) -> (32,10,64)
         q = self.Wq(x) # (32,10,512) @ (512, 64) -> (32,10,64)
         v = self.Wv(x) # (32,10,512) @ (512, 64) -> (32,10,64) 
-        print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64) #(DEBUG)
+        #print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64) #(DEBUG)
         
         # splitting k,q,v into their heads changing their shapes
         k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (32,8,10,8)
