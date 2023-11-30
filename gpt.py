@@ -52,9 +52,9 @@ def get_batch(split):
         data = train_data
     else:
         data = val_data
-    indices = torch.randint(len(data) - block_size, (batch_size,)) # generate 4 batches of 8 block_size (Ex.)
-    x = torch.stack([data[i:i+block_size] for i in indices])
-    y = torch.stack([data[i+1:i+block_size+1] for i in indices])
+    ixs = torch.randint(len(data) - block_size, (batch_size,)) # generate 32 batches of 10 block_size (Ex.)
+    x = torch.stack([data[i:i+block_size] for i in ixs])
+    y = torch.stack([data[i+1:i+block_size+1] for i in ixs])
     x, y = x.to(device), y.to(device)
     return x, y
 
@@ -100,55 +100,8 @@ class SelfAttentionHead(nn.Module):
 
         return out
 """
-# trying to make multi-head class without having to do a self-attention class, so treating heads as a dim
-class MultiHeadAttention_attempt(nn.Module):
-
-    def __init__(self, head_size, n_heads):
-        super().__init__()
-        assert n_embd % n_heads == 0
-        self.heads = n_heads # maybe I don't need this, since n_heads is global
-        self.Wk = nn.Linear(n_embd, head_size, bias=False) # (32, 16)
-        self.Wq = nn.Linear(n_embd, head_size, bias=False)
-        self.Wv = nn.Linear(n_embd, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-
-        # residual connections and dropout for efficiency
-        self.skip_connection = nn.Linear(head_size * n_heads, n_embd) 
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        # self-attention
-        B,T,C = x.shape
-        k = self.Wk(x) # (B,T,C) @ (32, 16) -> (B,T,16)
-        q = self.Wq(x)
-        v = self.Wv(x)
-        print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}")
-
-        # splitting k,q,v into their heads changing their shapes
-        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (B,T,heads,C) -> (B,heads,T,C)
-        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
-        v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
-
-        # (B,n_heads,T,C) @ (B,n_heads,C,T) -> (B,n_heads,T,T)
-        affinities = q @ k.transpose(-2, -1) * (C**-0.5) # C**-0.5 = math.sqrt(C)
-        affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
-        affinities = F.softmax(affinities, dim=-1)
-        affinities = self.dropout(affinities)
-
-        # weight aggregation with values
-        aggregation = affinities @ v
-
-        # reshape back 
-        aggregation = aggregation.transpose(-3, -2).view(B, -1, self.heads*C)
-
-        # residual connection and dropout
-        aggregation = self.skip_connection(aggregation)
-        aggregation = self.dropout(aggregation)
-
-        return aggregation
-
-# multiple self-attention heads
 """
+# multiple self-attention heads
 class MultiHeadAttention(nn.Module):
 
     def __init__(self, n_heads, head_size): # (head_size)
@@ -163,6 +116,63 @@ class MultiHeadAttention(nn.Module):
         #out = self.dropout(out)
         return out
 """
+
+# trying to make multi-head class without having to do a self-attention class, so treating heads as a dim
+class MultiHeadAttention_attempt(nn.Module):
+
+    def __init__(self, head_size, n_heads): # 32, 8
+        super().__init__()
+        assert n_embd % n_heads == 0 # 512%8 == 0 -> True
+        #self.heads = n_heads # 8
+        #(DEBUG)print(f"n_embd, head_size: {n_embd}, {head_size}")
+        self.Wk = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
+        self.Wq = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
+        self.Wv = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
+        # residual connections and dropout for efficiency
+        self.skip_connection = nn.Linear(head_size, n_embd) # (64, 512) -> ()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # self-attention
+        #(DEBUG)print(f"x shape inside MultiHead: {x.shape}") # (32,10,512)
+        #(DEBUG)print(f"Wk shape: {self.Wk}")
+        B,T,C = x.shape # B:32, T:10, C:512
+        k = self.Wk(x) # (32,10,512) @ (512, 64) -> (32,10,64)
+        q = self.Wq(x) # (32,10,512) @ (512, 64) -> (32,10,64)
+        v = self.Wv(x) # (32,10,512) @ (512, 64) -> (32,10,64) 
+        #(DEBUG)print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64)
+        
+        # splitting k,q,v into their heads changing their shapes
+        k = k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2) # (32,8,10,8)
+        q = q.view(B, T, n_heads, q.shape[-1]//n_heads).transpose(-3, -2) # (32,10,64) -> (32,10,8,64/8)
+        v = v.view(B, T, n_heads, v.shape[-1]//n_heads).transpose(-3, -2)
+        #(DEBUG)print(f"k shape after view and transpose {k.shape}")
+        #(DEBUG)print(f"k.shape after VIEW: {k.view(B, T, n_heads, k.shape[-1]//n_heads).shape}") # (32,10,8,64)
+        #(DEBUG)print(f"k.shape after TRANSPOSE: {k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2).shape}") # (32,10,8,64) 
+
+        # (32,8,10,8) @ (32,8,8,10) -> (32,8,10,10) porque (10,8) @ (8,10) = (10,10)
+        # (B,n_heads,T,q.shape[-1]) @ (B,n_heads,k.shape[-1],T) -> (B,n_heads,T,T)
+        affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
+        affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
+        affinities = F.softmax(affinities, dim=-1)
+        affinities = self.dropout(affinities)
+
+        # weight aggregation with values
+        aggregation = affinities @ v # (32,8,10,10) @ (32,8,10,8) -> (32,8,10,8)
+        #(DEBUG)print(aggregation.shape)
+
+        # reshape back 
+        # erro aqui (32,8,10,8).transpose(-3,-2) -> (32,10,8,8) -> .view(B,-1,n_heads*)
+        aggregation = aggregation.transpose(-3, -2)              # (32,10,8,8)
+        aggregation = aggregation.reshape(B, T, n_heads*n_heads) # (32,10,8*8)
+
+        # residual connection and dropout
+        aggregation = self.skip_connection(aggregation) # (32,10,64) @ (64,512) -> (32,10,512)
+        aggregation = self.dropout(aggregation)
+        #(DEBUG)print("YAYYY")
+        return aggregation
+
 # Feed Forward class
 class FeedForward(nn.Module):
 
@@ -182,17 +192,19 @@ class FeedForward(nn.Module):
 # communication and computation
 class TransformerBlock(nn.Module):
 
-    def __init__(self, n_embd, n_heads): # n_embd, n_heads
+    def __init__(self, n_embd, n_heads): # 512, 8
         super().__init__()
-        head_size = n_embd // n_heads
+        head_size = n_embd // n_heads # 512/8 = 64
+        #(DEBUG)print(f"n_embd:{n_embd}, n_heads:{n_heads}, head_size:{head_size}")
        #self.self_attention = MultiHeadAttention(n_heads, head_size)
-        self.attention = MultiHeadAttention_attempt(head_size, n_heads)
+        self.attention = MultiHeadAttention_attempt(head_size, n_heads) # (64, 8)
         self.feedforward = FeedForward(n_embd)
         self.layernorm1 = nn.LayerNorm(n_embd)
         self.layernorm2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
         #residual = x 
+        #(DEBUG)print(f"x shape inside TransformerBlock: {x.shape}") # (32,10,512)
         out = x + self.attention(self.layernorm1(x))
         out = x + self.feedforward(self.layernorm2(x))
         return out
@@ -202,12 +214,13 @@ class GPT(nn.Module):
     def __init__(self):
         super().__init__()
         # token embeddings
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 32): each token has a representation of a vector of 32 values
-        self.positional_embedding_table = nn.Embedding(block_size, n_embd) # ( 8, 32): each index of the block will have also a positional representation of 32 values
-        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)])
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 512): each token has a representation of a vector of 512 values
+        self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 512): each index of the block will have also a positional representation of 512 values
+        # transformer blocks
+        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # (512, 8)
         self.final_layernorm = nn.LayerNorm(n_embd)
         self.softmax = nn.Linear(n_embd, vocab_size)
-
+        # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock())
         # better init
         self.apply(self._init_weights)
 
@@ -224,7 +237,8 @@ class GPT(nn.Module):
         token_embeddings = self.token_embedding_table(index) # (B,T,C)
         positional_embeddings = self.positional_embedding_table(torch.arange(T, device=device)) # T: block_size
         emb = token_embeddings + positional_embeddings # (B,T,C)
-        x = self.blocks(emb) # (B,T,C)
+        #x = self.blocks(emb) # (B,T,C)
+        x = self.single_block(emb)
         x = self.final_layernorm(x) # (B,T,C)
         logits = self.softmax(x) # (B,T,vocab_size)
 
@@ -254,25 +268,24 @@ m = model.to(device)
 # Number of parameters in the model
 print(sum(p.numel() for p in m.parameters()),'params')#/1e6, 'M parameters')
 
-# optimizer
+# Adam optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 # training loop
-def train(model):
-    for iter in range(max_iterations):
-        # every once in a while evaluate the loss
-        if iter % eval_interval == 0 or iter == max_iterations-1:
-            losses = estimate_loss()
-            print(f"step{iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+for iter in range(max_iterations):
+    # every once in a while evaluate the loss
+    if iter % eval_interval == 0 or iter == max_iterations-1:
+        losses = estimate_loss()
+        print(f"step{iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-        # sample batch
-        xb, yb = get_batch('train')
-
-        # evaluate the loss
-        logits, loss = model(xb, yb)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
+    # sample batch
+    xb, yb = get_batch('train')
+    
+    # evaluate the loss
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
