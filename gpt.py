@@ -3,10 +3,10 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 32 #4 #64
-block_size = 10 #8 #256
-n_embd = 512 #32 #384
-n_heads = 8 #4 #6
+batch_size = 64#32 #4 #64
+block_size = 256#10 #8 #256
+n_embd = 384#512 #32 #384
+n_heads = 6#8 #4 #6
 #head_size = 16
 n_layers = 6
 dropout = 0.2
@@ -125,28 +125,29 @@ class MultiHeadAttention_attempt(nn.Module):
         assert n_embd % n_heads == 0 # 512%8 == 0 -> True
         #self.heads = n_heads # 8
         #(DEBUG)print(f"n_embd, head_size: {n_embd}, {head_size}")
-        self.Wk = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
-        self.Wq = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
-        self.Wv = nn.Linear(n_embd, head_size, bias=False) # (512, 64)
+        # note: changed (n_embd, head_size) to (n_embd, n_embd)
+        self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (512, 64) 
+        self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (512, 64) 
+        self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (512, 64)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         # residual connections and dropout for efficiency
-        self.skip_connection = nn.Linear(head_size, n_embd) # (64, 512) -> ()
+        self.skip_connection = nn.Linear(n_embd, n_embd) # (64, 512) # changed (head_size,n_embd) to (n_embd,n_embd)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # self-attention
-        #(DEBUG)print(f"x shape inside MultiHead: {x.shape}") # (32,10,512)
+        print(f"x shape inside MultiHead: {x.shape}") # (32,10,512) #(DEBUG)
         #(DEBUG)print(f"Wk shape: {self.Wk}")
-        B,T,C = x.shape # B:32, T:10, C:512
+        B,T,C = x.shape # B:32, T:10, C:512 #B:64, T:256, C:384
         k = self.Wk(x) # (32,10,512) @ (512, 64) -> (32,10,64)
         q = self.Wq(x) # (32,10,512) @ (512, 64) -> (32,10,64)
         v = self.Wv(x) # (32,10,512) @ (512, 64) -> (32,10,64) 
-        #(DEBUG)print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64)
+        print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64) #(DEBUG)
         
         # splitting k,q,v into their heads changing their shapes
-        k = k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2) # (32,8,10,8)
-        q = q.view(B, T, n_heads, q.shape[-1]//n_heads).transpose(-3, -2) # (32,10,64) -> (32,10,8,64/8)
-        v = v.view(B, T, n_heads, v.shape[-1]//n_heads).transpose(-3, -2)
+        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (32,8,10,8)
+        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (32,10,64) -> (32,10,8,64/8)
+        v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
         #(DEBUG)print(f"k shape after view and transpose {k.shape}")
         #(DEBUG)print(f"k.shape after VIEW: {k.view(B, T, n_heads, k.shape[-1]//n_heads).shape}") # (32,10,8,64)
         #(DEBUG)print(f"k.shape after TRANSPOSE: {k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2).shape}") # (32,10,8,64) 
@@ -156,21 +157,22 @@ class MultiHeadAttention_attempt(nn.Module):
         affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
-        affinities = self.dropout(affinities)
+        #affinities = self.dropout(affinities)
 
         # weight aggregation with values
         aggregation = affinities @ v # (32,8,10,10) @ (32,8,10,8) -> (32,8,10,8)
-        #(DEBUG)print(aggregation.shape)
+        #(DEBUG)print("aggregation:", aggregation.shape)
 
         # reshape back 
         # erro aqui (32,8,10,8).transpose(-3,-2) -> (32,10,8,8) -> .view(B,-1,n_heads*)
         aggregation = aggregation.transpose(-3, -2)              # (32,10,8,8)
-        aggregation = aggregation.reshape(B, T, n_heads*n_heads) # (32,10,8*8)
+        aggregation = aggregation.reshape(B, T, n_heads*(C//n_heads)) # (32,10,8*8)
+        #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
         aggregation = self.skip_connection(aggregation) # (32,10,64) @ (64,512) -> (32,10,512)
         aggregation = self.dropout(aggregation)
-        #(DEBUG)print("YAYYY")
+        
         return aggregation
 
 # Feed Forward class
@@ -179,9 +181,9 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4*n_embd),
+            nn.Linear(n_embd, n_embd), #4*n_embd),
             nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd),
+            nn.Linear(n_embd, n_embd), #(4*n_embd, n_embd),
             nn.Dropout(dropout)
         )
 
