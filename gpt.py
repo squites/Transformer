@@ -172,7 +172,7 @@ class MultiHeadAttention_attempt(nn.Module):
         # residual connection and dropout
         aggregation = self.skip_connection(aggregation) # (32,10,64) @ (64,512) -> (32,10,512)
         aggregation = self.dropout(aggregation)
-        
+        #print("aggregation", aggregation.shape) # 64, 256, 384
         return aggregation
 
 # Feed Forward class
@@ -181,9 +181,9 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd), #4*n_embd),
+            nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
-            nn.Linear(n_embd, n_embd), #(4*n_embd, n_embd),
+            nn.Linear(4*n_embd, n_embd), #(4*n_embd, n_embd),
             nn.Dropout(dropout)
         )
 
@@ -198,7 +198,7 @@ class TransformerBlock(nn.Module):
         super().__init__()
         head_size = n_embd // n_heads # 512/8 = 64
         #(DEBUG)print(f"n_embd:{n_embd}, n_heads:{n_heads}, head_size:{head_size}")
-       #self.self_attention = MultiHeadAttention(n_heads, head_size)
+        #self.self_attention = MultiHeadAttention(n_heads, head_size)
         self.attention = MultiHeadAttention_attempt(head_size, n_heads) # (64, 8)
         self.feedforward = FeedForward(n_embd)
         self.layernorm1 = nn.LayerNorm(n_embd)
