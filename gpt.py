@@ -89,7 +89,8 @@ class MultiHeadAttention_attempt(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         # residual connections and dropout for efficiency
         self.skip_connection = nn.Linear(n_embd, n_embd) # (64, 512) # changed (head_size,n_embd) to (n_embd,n_embd)
-        self.dropout = nn.Dropout(dropout)
+        self.affinities_drop = nn.Dropout(dropout)
+        self.residual_drop = nn.Dropout(dropout)
 
     def forward(self, x):
         # self-attention
@@ -114,21 +115,21 @@ class MultiHeadAttention_attempt(nn.Module):
         affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
-        affinities = self.dropout(affinities)
+        affinities = self.affinities_drop(affinities)
 
         # weight aggregation with values
         aggregation = affinities @ v # (32,8,10,10) @ (32,8,10,8) -> (32,8,10,8)
         #(DEBUG)print("aggregation:", aggregation.shape)
 
         # reshape back 
-        # erro aqui (32,8,10,8).transpose(-3,-2) -> (32,10,8,8) -> .view(B,-1,n_heads*)
         aggregation = aggregation.transpose(-3, -2)              # (32,10,8,8)
-        aggregation = aggregation.reshape(B, T, n_heads*(C//n_heads)) # (32,10,8*8)
+        #aggregation = aggregation.reshape(B, T, n_heads*(C//n_heads)) # (32,10,8*8)
+        aggregation = aggregation.view(B,T,C)
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
         aggregation = self.skip_connection(aggregation) # (32,10,64) @ (64,512) -> (32,10,512)
-        aggregation = self.dropout(aggregation)
+        aggregation = self.residual_drop(aggregation)
         #print("aggregation", aggregation.shape) # 64, 256, 384
         return aggregation
 
@@ -155,7 +156,6 @@ class TransformerBlock(nn.Module):
         super().__init__()
         head_size = n_embd // n_heads # 512/8 = 64
         #(DEBUG)print(f"n_embd:{n_embd}, n_heads:{n_heads}, head_size:{head_size}")
-        #self.self_attention = MultiHeadAttention(n_heads, head_size)
         self.attention = MultiHeadAttention_attempt(head_size, n_heads) # (64, 8)
         self.feedforward = FeedForward(n_embd)
         self.layernorm1 = nn.LayerNorm(n_embd)
@@ -176,7 +176,7 @@ class GPT(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 512): each token has a representation of a vector of 512 values
         self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 512): each index of the block will have also a positional representation of 512 values
         # transformer blocks
-        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # (512, 8)
+        self.blocks = nn.Sequential([TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # tirei '*' na frente de '*[Transformer...]
         self.final_layernorm = nn.LayerNorm(n_embd)
         self.softmax = nn.Linear(n_embd, vocab_size)
         # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock())
