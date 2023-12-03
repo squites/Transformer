@@ -71,55 +71,12 @@ def estimate_loss():
         out[split] = losses.mean()
     model.train()
     return out
-"""
-# one head of self-attention
-class SelfAttentionHead(nn.Module):
-
-    def __init__(self, head_size):
-        super().__init__()
-        self.key   = nn.Linear(n_embd, head_size, bias=False) # (32,head_size)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-        #self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        B,T,C = x.shape     # (batch_size, block_size, n_embd) -> (4,8,32) 
-        k = self.key(x)     # (batch, block, n_embd) @ (n_embd, head_size) -> (batch, block, head_size)
-        q = self.query(x)
-        v = self.value(x)
-
-        # compute the "affinities"
-        affn = q @ k.transpose(-2, -1) * (C**-0.5) # (B, T, head_size) @ (B, head_size, T) -> (B,T,T)
-        affn = affn.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        affn = F.softmax(affn, dim=-1)
-        #affn = self.dropout(affn)
-        
-        # weight aggregation
-        out = affn @ v # (B,T,T) @ (B,T,head_size) -> (B,T,head_size)
-
-        return out
-"""
-"""
-# multiple self-attention heads
-class MultiHeadAttention(nn.Module):
-
-    def __init__(self, n_heads, head_size): # (head_size)
-        super().__init__()
-        self.heads = nn.ModuleList([SelfAttentionHead(head_size) for _ in range(n_heads)]) # creates n_heads SelfAttentionHeads and groups into a list
-        #self.proj = nn.Linear(head_size * n_heads, n_embd) # (16*4, 32) -> (64, 32)
-        #self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        out = torch.cat([head(x) for head in self.heads], dim=-1) 
-        #out = self.proj(out)
-        #out = self.dropout(out)
-        return out
-"""
 
 # trying to make multi-head class without having to do a self-attention class, so treating heads as a dim
 class MultiHeadAttention_attempt(nn.Module):
-
+    """
+        Computes MultiHead self-attention in parallel, treating heads as a dimension
+    """
     def __init__(self, head_size, n_heads): # 32, 8
         super().__init__()
         assert n_embd % n_heads == 0 # 512%8 == 0 -> True
@@ -157,7 +114,7 @@ class MultiHeadAttention_attempt(nn.Module):
         affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
-        #affinities = self.dropout(affinities)
+        affinities = self.dropout(affinities)
 
         # weight aggregation with values
         aggregation = affinities @ v # (32,8,10,10) @ (32,8,10,8) -> (32,8,10,8)
@@ -267,7 +224,7 @@ model = GPT()
 m = model.to(device)
 
 # Number of parameters in the model
-print(sum(p.numel() for p in m.parameters()),'params')#/1e6, 'M parameters')
+print(sum(p.numel() for p in m.parameters())/1e6,'M parameters')#/1e6, 'M parameters')
 
 # Adam optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -291,3 +248,5 @@ for iter in range(max_iterations):
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=5000)[0].tolist()))
+
+# desired loss values: train 1.0763, val 1.4873
