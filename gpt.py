@@ -101,9 +101,9 @@ class MaskedMultiheadAttention(nn.Module):
         v = self.Wv(x) # (64,256,384) @ (384, 384) -> (64,256,384)
         
         # splitting k,q,v into their heads changing their shapes
-        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (64,6,256,64) # 384/6=64
-        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # permute?
-        v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
+        k = k.view(B, T, self.n_heads, C//self.n_heads).transpose(-3, -2) # (64,6,256,64) # 384/6=64
+        q = q.view(B, T, self.n_heads, C//self.n_heads).transpose(-3, -2) # permute?
+        v = v.view(B, T, self.n_heads, C//self.n_heads).transpose(-3, -2)
 
         # Scaled Dot-Product attention -----
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
