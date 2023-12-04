@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -7,7 +8,6 @@ batch_size = 64#32 #4
 block_size = 256 #10 #8 # sequence length
 n_embd = 384#512 #32
 n_heads = 6#8 #4 #6
-#head_size = 16
 n_layers = 6
 dropout = 0.2
 learning_rate = 3e-4
@@ -73,11 +73,11 @@ def estimate_loss():
     return out
 
 # trying to make multi-head class without having to do a self-attention class, so treating heads as a dim
-class MultiHeadAttention_attempt(nn.Module):
+class MaskedMultiheadAttention(nn.Module):
     """
         Computes MultiHead self-attention in parallel, treating heads as a dimension
     """
-    def __init__(self, head_size, n_heads): # 32, 8 # I'm not using head_size
+    def __init__(self, n_heads): # 32, 8 # There was head_size as a parameter too
         super().__init__()
         assert n_embd % n_heads == 0 # 512%8 == 0 -> True
         #self.heads = n_heads # 8
@@ -113,12 +113,12 @@ class MultiHeadAttention_attempt(nn.Module):
         # Scaled Dot-Product attention -----
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
         # (B,n_heads,T,q.shape[-1]) @ (B,n_heads,k.shape[-1],T) -> (B,n_heads,T,T)
-        affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
+        affinities = q @ k.transpose(-2, -1) * math.sqrt(k.shape[-1]) #(k.shape[-1]**-0.5)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
         affinities = self.affinities_drop(affinities)
 
-        # weight aggregation with values
+        # weight aggregation with values # Is this the Linear layer that is on the diagram after Scaled Dot-product attention?
         aggregation = affinities @ v # (64,6,256,256) @ (64,6,256,64) -> (64,6,256,64)
         #(DEBUG)print("aggregation:", aggregation.shape)                  0  2  1  3
         # -----
@@ -131,41 +131,40 @@ class MultiHeadAttention_attempt(nn.Module):
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
-        aggregation = self.skip_connection(aggregation) # (64,256,384) @ (384,384) -> (32,10,512)
+        aggregation = self.skip_connection(aggregation)
         aggregation = self.residual_drop(aggregation)
         #print("aggregation", aggregation.shape) # 64, 256, 384
-        return aggregation
+        return aggregation # (64,256,384)
 
-# Feed Forward class
+# MLP class: computation
 class FeedForward(nn.Module):
 
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4*n_embd),
+            nn.Linear(n_embd, 4*n_embd), # (384, 1536)
             nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd), #(4*n_embd, n_embd),
+            nn.Linear(4*n_embd, n_embd), # (1536, 384)
             nn.Dropout(dropout)
         )
 
     def forward(self, x):
-        out = self.net(x)
+        out = self.net(x) # (64,256,384) @ (384,1536) -> (64,256,1536) @ (1536,384) -> (64,256,384)
         return out
 
 # communication and computation
 class TransformerBlock(nn.Module):
 
-    def __init__(self, n_embd, n_heads): # 512, 8
+    def __init__(self, n_embd, n_heads): # 384, 6 
         super().__init__()
-        head_size = n_embd // n_heads # 512/8 = 64
+        #head_size = n_embd // n_heads # 512/8 = 64
         #(DEBUG)print(f"n_embd:{n_embd}, n_heads:{n_heads}, head_size:{head_size}")
-        self.attention = MultiHeadAttention_attempt(head_size, n_heads) # (64, 8)
-        self.feedforward = FeedForward(n_embd)
-        self.layernorm1 = nn.LayerNorm(n_embd)
+        self.attention = MaskedMultiheadAttention(n_heads) # (6)
+        self.feedforward = FeedForward(n_embd) # 384
+        self.layernorm1 = nn.LayerNorm(n_embd) # this goes before attention
         self.layernorm2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        #residual = x 
         #(DEBUG)print(f"x shape inside TransformerBlock: {x.shape}") # (32,10,512)
         out = x + self.attention(self.layernorm1(x))
         out = x + self.feedforward(self.layernorm2(x))
@@ -176,14 +175,14 @@ class GPT(nn.Module):
     def __init__(self):
         super().__init__()
         # token embeddings
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 512): each token has a representation of a vector of 512 values
-        self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 512): each index of the block will have also a positional representation of 512 values
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 384): each token has a representation of a vector of 384 values
+        self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 384): each index of the block will have also a positional representation of 384 values
         # transformer blocks
-        # changed nn.Sequential to nn.ModuleList
-        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # tirei '*' na frente de '*[Transformer...]
+        self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # will execute sequentially n TransformerBlocks
         self.final_layernorm = nn.LayerNorm(n_embd)
+        # shouldn't have another linear layer here, right before the softmax?
         self.softmax = nn.Linear(n_embd, vocab_size)
-        # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock())
+        # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock()). Executes sequentially everything before moving on to something different
         # better init
         self.apply(self._init_weights)
 
@@ -197,10 +196,10 @@ class GPT(nn.Module):
 
     def forward(self, index, targets=None):
         B,T = index.shape
-        token_embeddings = self.token_embedding_table(index) # (B,T,C)
+        token_embeddings = self.token_embedding_table(index) # (65, 384)[index]: meaning takes the index row in the table (65,384)
         positional_embeddings = self.positional_embedding_table(torch.arange(T, device=device)) # T: block_size
-        emb = token_embeddings + positional_embeddings # (B,T,C)
-        x = self.blocks(emb) # (B,T,C)
+        emb = token_embeddings + positional_embeddings # (1,384) + (1,384) -> (1,384) # for 1 index
+        x = self.transformer_blocks(emb) # (1,384)
         x = self.final_layernorm(x) # (B,T,C)
         logits = self.softmax(x) # (B,T,vocab_size)
 
