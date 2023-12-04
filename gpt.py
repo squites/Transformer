@@ -125,15 +125,15 @@ class MaskedMultiheadAttention(nn.Module):
         # -----
 
         # reshape back # note: I'll try with permute().contiguous() following the blog, maybe this is the error
-        #aggregation = aggregation.transpose(-3, -2) # (64,256,6,64)
-        aggregation = aggregation.permute(0, 2, 1, 3).contiguous()
-        aggregation = aggregation.view(B, T, C)  # (64,256,384)
+        aggregation = aggregation.transpose(-3, -2).contiguous().view(B,T,C) # (64,256,6,64)
+        #aggregation = aggregation.permute(0, 2, 1, 3).contiguous()
+        #aggregation = aggregation.view(B, T, C)  # (64,256,384)
         #aggregation = aggregation.reshape(B,T,aggregation[-2]*aggregation[-1]) # it says to reshape() here instead of view()
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
         aggregation = self.skip_connection(aggregation)
-        aggregation = self.residual_drop(aggregation)
+        #aggregation = self.residual_drop(aggregation)
         #print("aggregation", aggregation.shape) # 64, 256, 384
         aggregation = self.out_linear(aggregation)
         return aggregation # (64,256,384)
