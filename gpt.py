@@ -85,7 +85,7 @@ class MaskedMultiheadAttention(nn.Module):
         self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
         self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
         self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (384, 384)
-        self.out_linear = nn.Linear(n_embd, n_embd, bias=False) 
+        # self.out_linear = nn.Linear(n_embd, n_embd, bias=False) 
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         # residual connections and dropout for efficiency
         self.skip_connection = nn.Linear(n_embd, n_embd) # (384, 384)  # changed (head_size,n_embd) to (n_embd,n_embd)
@@ -94,22 +94,16 @@ class MaskedMultiheadAttention(nn.Module):
 
     def forward(self, x):
         # self-attention
-        #print(f"x shape inside MultiHead: {x.shape}") # (32,10,512) #(DEBUG)
-        #(DEBUG)print(f"Wk shape: {self.Wk}")
         B,T,C = x.shape # B:64, T:256, C:384 
         # These are the actual vectors
         k = self.Wk(x) # (64,256,384) @ (384, 384) -> (64,256,384)
         q = self.Wq(x) # (64,256,384) @ (384, 384) -> (64,256,384)
         v = self.Wv(x) # (64,256,384) @ (384, 384) -> (64,256,384)
-        #print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (64,256,384) #(DEBUG)
         
         # splitting k,q,v into their heads changing their shapes
         k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (64,6,256,64) # 384/6=64
         q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # permute?
         v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
-        #(DEBUG)print(f"k shape after view and transpose {k.shape}")
-        #(DEBUG)print(f"k.shape after VIEW: {k.view(B, T, n_heads, k.shape[-1]//n_heads).shape}") # (32,10,8,64)
-        #(DEBUG)print(f"k.shape after TRANSPOSE: {k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2).shape}") # (32,10,8,64) 
 
         # Scaled Dot-Product attention -----
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
@@ -121,8 +115,6 @@ class MaskedMultiheadAttention(nn.Module):
 
         # weight aggregation with values # Is this the Linear layer that is on the diagram after Scaled Dot-product attention?
         aggregation = affinities @ v # (64,6,256,256) @ (64,6,256,64) -> (64,6,256,64)
-        #(DEBUG)print("aggregation:", aggregation.shape)                  0  2  1  3
-        # -----
 
         # reshape back # note: I'll try with permute().contiguous() following the blog, maybe this is the error
         aggregation = aggregation.transpose(-3, -2).contiguous().view(B,T,C) # (64,256,6,64)
@@ -184,15 +176,15 @@ class GPT(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # token embeddings
+        # embeddings
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 384): each token has a representation of a vector of 384 values
         self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 384): each index of the block will have also a positional representation of 384 values
-        # transformer blocks
-        self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # will execute sequentially n TransformerBlocks
+        # transformer
+        self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for _ in range(n_layers)]) # will execute sequentially n TransformerBlocks
         self.final_layernorm = nn.LayerNorm(n_embd)
-        # shouldn't have another linear layer here, right before the softmax?
-        self.softmax = nn.Linear(n_embd, vocab_size)
-        # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock()). Executes sequentially everything before moving on to something different
+        self.lm_head = nn.Linear(n_embd, vocab_size) # Linear layer before softmax?
+        #self.softmax = nn.Linear(n_embd, vocab_size)
+        
         # better init
         self.apply(self._init_weights)
 
@@ -211,7 +203,7 @@ class GPT(nn.Module):
         emb = token_embeddings + positional_embeddings # (1,384) + (1,384) -> (1,384) # for 1 index
         x = self.transformer_blocks(emb) # (1,384)
         x = self.final_layernorm(x) # (B,T,C)
-        logits = self.softmax(x) # (B,T,vocab_size)
+        logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
