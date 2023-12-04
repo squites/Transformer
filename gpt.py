@@ -114,7 +114,7 @@ class MaskedMultiheadAttention(nn.Module):
         # Scaled Dot-Product attention -----
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
         # (B,n_heads,T,q.shape[-1]) @ (B,n_heads,k.shape[-1],T) -> (B,n_heads,T,T)
-        affinities = q @ k.transpose(-2, -1) * math.sqrt(k.shape[-1]) #(k.shape[-1]**-0.5)
+        affinities = (q @ k.transpose(-2, -1) * (1.0 / math.sqrt(k.size(-1)))) #(k.shape[-1]**-0.5)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
         affinities = self.affinities_drop(affinities)
@@ -132,11 +132,11 @@ class MaskedMultiheadAttention(nn.Module):
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
-        aggregation = self.skip_connection(aggregation)
+        #aggregation = self.skip_connection(aggregation)
         #aggregation = self.residual_drop(aggregation)
-        #print("aggregation", aggregation.shape) # 64, 256, 384
-        aggregation = self.out_linear(aggregation)
-        return aggregation # (64,256,384)
+        out = self.residual_drop(self.skip_connection(aggregation))
+        out = self.out_linear(out)
+        return out # (64,256,384)
 
 # MLP class: computation
 class FeedForward(nn.Module):
