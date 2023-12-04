@@ -79,8 +79,8 @@ class MaskedMultiheadAttention(nn.Module):
     """
     def __init__(self, n_heads): # 32, 8 # There was head_size as a parameter too
         super().__init__()
-        assert n_embd % n_heads == 0 # 512%8 == 0 -> True
-        #self.heads = n_heads # 8
+        assert n_embd % n_heads == 0 # 384 % 6 == 0 -> True
+        self.n_heads = n_heads # 8
         #(DEBUG)print(f"n_embd, head_size: {n_embd}, {head_size}")
         self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
         self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
