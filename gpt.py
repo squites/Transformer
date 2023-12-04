@@ -84,7 +84,8 @@ class MaskedMultiheadAttention(nn.Module):
         #(DEBUG)print(f"n_embd, head_size: {n_embd}, {head_size}")
         self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
         self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
-        self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
+        self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (384, 384)
+        self.out_linear = nn.Linear(n_embd, n_embd, bias=False) 
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         # residual connections and dropout for efficiency
         self.skip_connection = nn.Linear(n_embd, n_embd) # (384, 384)  # changed (head_size,n_embd) to (n_embd,n_embd)
@@ -134,6 +135,7 @@ class MaskedMultiheadAttention(nn.Module):
         aggregation = self.skip_connection(aggregation)
         aggregation = self.residual_drop(aggregation)
         #print("aggregation", aggregation.shape) # 64, 256, 384
+        aggregation = self.out_linear(aggregation)
         return aggregation # (64,256,384)
 
 # MLP class: computation
