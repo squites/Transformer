@@ -3,9 +3,9 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 64#32 #4 #64
-block_size = 256#10 #8 #256
-n_embd = 384#512 #32 #384
+batch_size = 64#32 #4
+block_size = 256 #10 #8 # sequence length
+n_embd = 384#512 #32
 n_heads = 6#8 #4 #6
 #head_size = 16
 n_layers = 6
@@ -77,18 +77,17 @@ class MultiHeadAttention_attempt(nn.Module):
     """
         Computes MultiHead self-attention in parallel, treating heads as a dimension
     """
-    def __init__(self, head_size, n_heads): # 32, 8
+    def __init__(self, head_size, n_heads): # 32, 8 # I'm not using head_size
         super().__init__()
         assert n_embd % n_heads == 0 # 512%8 == 0 -> True
         #self.heads = n_heads # 8
         #(DEBUG)print(f"n_embd, head_size: {n_embd}, {head_size}")
-        # note: changed (n_embd, head_size) to (n_embd, n_embd)
-        self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (512, 64) 
-        self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (512, 64) 
-        self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (512, 64)
+        self.Wk = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
+        self.Wq = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
+        self.Wv = nn.Linear(n_embd, n_embd, bias=False) # (384, 384) 
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)).view(1,1,block_size,block_size))
         # residual connections and dropout for efficiency
-        self.skip_connection = nn.Linear(n_embd, n_embd) # (64, 512) # changed (head_size,n_embd) to (n_embd,n_embd)
+        self.skip_connection = nn.Linear(n_embd, n_embd) # (384, 384)  # changed (head_size,n_embd) to (n_embd,n_embd)
         self.affinities_drop = nn.Dropout(dropout)
         self.residual_drop = nn.Dropout(dropout)
 
@@ -96,21 +95,23 @@ class MultiHeadAttention_attempt(nn.Module):
         # self-attention
         #print(f"x shape inside MultiHead: {x.shape}") # (32,10,512) #(DEBUG)
         #(DEBUG)print(f"Wk shape: {self.Wk}")
-        B,T,C = x.shape # B:32, T:10, C:512 #B:64, T:256, C:384
-        k = self.Wk(x) # (32,10,512) @ (512, 64) -> (32,10,64)
-        q = self.Wq(x) # (32,10,512) @ (512, 64) -> (32,10,64)
-        v = self.Wv(x) # (32,10,512) @ (512, 64) -> (32,10,64) 
-        #print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (32,10,64) #(DEBUG)
+        B,T,C = x.shape # B:64, T:256, C:384 
+        # These are the actual vectors
+        k = self.Wk(x) # (64,256,384) @ (384, 384) -> (64,256,384)
+        q = self.Wq(x) # (64,256,384) @ (384, 384) -> (64,256,384)
+        v = self.Wv(x) # (64,256,384) @ (384, 384) -> (64,256,384)
+        #print(f"k.shape {k.shape}, q.shape {q.shape}, v.shape {v.shape}") # (64,256,384) #(DEBUG)
         
         # splitting k,q,v into their heads changing their shapes
-        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (32,8,10,8)
-        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (32,10,64) -> (32,10,8,64/8)
+        k = k.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # (64,6,256,64) # 384/6=64
+        q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2) # permute?
         v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
         #(DEBUG)print(f"k shape after view and transpose {k.shape}")
         #(DEBUG)print(f"k.shape after VIEW: {k.view(B, T, n_heads, k.shape[-1]//n_heads).shape}") # (32,10,8,64)
         #(DEBUG)print(f"k.shape after TRANSPOSE: {k.view(B, T, n_heads, k.shape[-1]//n_heads).transpose(-3, -2).shape}") # (32,10,8,64) 
 
-        # (32,8,10,8) @ (32,8,8,10) -> (32,8,10,10) porque (10,8) @ (8,10) = (10,10)
+        # Scaled Dot-Product attention -----
+        # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
         # (B,n_heads,T,q.shape[-1]) @ (B,n_heads,k.shape[-1],T) -> (B,n_heads,T,T)
         affinities = q @ k.transpose(-2, -1) * (k.shape[-1]**-0.5) # C**-0.5 = math.sqrt(C)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
@@ -118,17 +119,19 @@ class MultiHeadAttention_attempt(nn.Module):
         affinities = self.affinities_drop(affinities)
 
         # weight aggregation with values
-        aggregation = affinities @ v # (32,8,10,10) @ (32,8,10,8) -> (32,8,10,8)
-        #(DEBUG)print("aggregation:", aggregation.shape)
+        aggregation = affinities @ v # (64,6,256,256) @ (64,6,256,64) -> (64,6,256,64)
+        #(DEBUG)print("aggregation:", aggregation.shape)                  0  2  1  3
+        # -----
 
-        # reshape back 
-        aggregation = aggregation.transpose(-3, -2)              # (32,10,8,8)
-        #aggregation = aggregation.reshape(B, T, n_heads*(C//n_heads)) # (32,10,8*8)
-        aggregation = aggregation.view(B,T,C)
+        # reshape back # note: I'll try with permute().contiguous() following the blog, maybe this is the error
+        #aggregation = aggregation.transpose(-3, -2) # (64,256,6,64)
+        aggregation = aggregation.permute(0, 2, 1, 3).contiguous()
+        aggregation = aggregation.view(B, T, C)  # (64,256,384)
+        #aggregation = aggregation.reshape(B,T,aggregation[-2]*aggregation[-1]) # it says to reshape() here instead of view()
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
-        aggregation = self.skip_connection(aggregation) # (32,10,64) @ (64,512) -> (32,10,512)
+        aggregation = self.skip_connection(aggregation) # (64,256,384) @ (384,384) -> (32,10,512)
         aggregation = self.residual_drop(aggregation)
         #print("aggregation", aggregation.shape) # 64, 256, 384
         return aggregation
@@ -176,7 +179,8 @@ class GPT(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 512): each token has a representation of a vector of 512 values
         self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 512): each index of the block will have also a positional representation of 512 values
         # transformer blocks
-        self.blocks = nn.Sequential([TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # tirei '*' na frente de '*[Transformer...]
+        # changed nn.Sequential to nn.ModuleList
+        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for i in range(n_layers)]) # tirei '*' na frente de '*[Transformer...]
         self.final_layernorm = nn.LayerNorm(n_embd)
         self.softmax = nn.Linear(n_embd, vocab_size)
         # The sequential will be: nn.Sequential(TransformerBlock(), TransformerBlock(),..., TransformerBlock())
@@ -250,3 +254,5 @@ context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=5000)[0].tolist()))
 
 # desired loss values: train 1.0763, val 1.4873
+# note: For every word, there's a query, key and value vector. In our case, we're using a single token for
+# a single character, so for every character(token) we'll have a query,key,value vector.
