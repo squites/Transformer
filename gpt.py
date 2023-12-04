@@ -114,7 +114,7 @@ class MaskedMultiheadAttention(nn.Module):
         # Scaled Dot-Product attention -----
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256) porque (10,8) @ (8,10) = (10,10)
         # (B,n_heads,T,q.shape[-1]) @ (B,n_heads,k.shape[-1],T) -> (B,n_heads,T,T)
-        affinities = (q @ k.transpose(-2, -1) * (1.0 / math.sqrt(k.size(-1)))) #(k.shape[-1]**-0.5)
+        affinities = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) #(k.shape[-1]**-0.5)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
         affinities = self.affinities_drop(affinities)
@@ -135,7 +135,7 @@ class MaskedMultiheadAttention(nn.Module):
         #aggregation = self.skip_connection(aggregation)
         #aggregation = self.residual_drop(aggregation)
         out = self.residual_drop(self.skip_connection(aggregation))
-        out = self.out_linear(out)
+        #out = self.out_linear(out)
         return out # (64,256,384)
 
 # MLP class: computation
@@ -143,16 +143,24 @@ class FeedForward(nn.Module):
 
     def __init__(self, n_embd):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4*n_embd), # (384, 1536)
-            nn.ReLU(),
-            nn.Linear(4*n_embd, n_embd), # (1536, 384)
-            nn.Dropout(dropout)
-        )
+        #self.net = nn.Sequential(
+        #    nn.Linear(n_embd, 4*n_embd), # (384, 1536)
+        #    nn.ReLU(),
+        #    nn.Linear(4*n_embd, n_embd), # (1536, 384)
+        #    nn.Dropout(dropout)
+        #)
+        self.linear1 = nn.Linear(n_embd, 4*n_embd)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(4*n_embd, n_embd)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x):
-        out = self.net(x) # (64,256,384) @ (384,1536) -> (64,256,1536) @ (1536,384) -> (64,256,384)
-        return out
+        #out = self.net(x) # (64,256,384) @ (384,1536) -> (64,256,1536) @ (1536,384) -> (64,256,384)
+        x = self.linear1(x)
+        x = self.relu(x)
+        x = self.linear2(x)
+        x = self.drop(x)
+        return x
 
 # communication and computation
 class TransformerBlock(nn.Module):
@@ -161,10 +169,10 @@ class TransformerBlock(nn.Module):
         super().__init__()
         #head_size = n_embd // n_heads # 512/8 = 64
         #(DEBUG)print(f"n_embd:{n_embd}, n_heads:{n_heads}, head_size:{head_size}")
-        self.attention = MaskedMultiheadAttention(n_heads) # (6)
+        self.attention   = MaskedMultiheadAttention(n_heads) # (6)
         self.feedforward = FeedForward(n_embd) # 384
-        self.layernorm1 = nn.LayerNorm(n_embd) # this goes before attention
-        self.layernorm2 = nn.LayerNorm(n_embd)
+        self.layernorm1  = nn.LayerNorm(n_embd) # this goes before attention
+        self.layernorm2  = nn.LayerNorm(n_embd)
 
     def forward(self, x):
         #(DEBUG)print(f"x shape inside TransformerBlock: {x.shape}") # (32,10,512)
