@@ -6,13 +6,13 @@ from torch.nn import functional as F
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
+n_embd = 384
+n_heads = 6
+n_layer = 6
 max_iters = 5000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iters = 200
-n_embd = 384
-n_heads = 6
-n_layer = 6
 dropout = 0.2
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"device: {device}")
@@ -28,7 +28,7 @@ with open('input.txt', 'r', encoding='utf-8') as f:
 vocab = sorted(list(set(tinyshakespeare)))
 vocab_size = len(vocab)
 
-# create mappings from characters to integers and vice-versa
+# maps from character to integer and vice-versa
 def encode(chars):
     stoi = {ch:i for i,ch in enumerate(vocab)}
     return [stoi[c] for c in chars]
@@ -40,7 +40,7 @@ def decode(ints):
 #print(encode('transformers!'))
 #print(decode(encode('transformers!')))
 
-# Train and test splits
+# Train/test splits
 data = torch.tensor(encode(tinyshakespeare), dtype=torch.long) # encode the whole dataset
 n = int(0.9*len(data))
 train_data = data[:n] # 90%
@@ -48,17 +48,14 @@ val_data = data[n:]   # 10%
 
 # generate a random batch of data of inputs x and targets y
 def get_batch(split):
-    #data = train_data if split == 'train' else val_data
-    if split == 'train':
-        data = train_data
-    else:
-        data = val_data
+    data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     x, y = x.to(device), y.to(device)
     return x, y
 
+# estimate loss over time (steps)
 @torch.no_grad()
 def estimate_loss():
     out = {}
@@ -73,6 +70,7 @@ def estimate_loss():
     model.train()
     return out
 
+# finally got it multihead attention to work, treating selfattention heads as a dimension
 class MaskedMultiheadAttention(nn.Module):
     """
         Computes MultiHead self-attention in parallel, treating heads as a dimension
@@ -101,7 +99,7 @@ class MaskedMultiheadAttention(nn.Module):
         q = q.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
         v = v.view(B, T, n_heads, C//n_heads).transpose(-3, -2)
 
-        # Scaled Dot-Product attention -----
+        # Scaled Dot-Product attention
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256)
         affinities = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) #(k.shape[-1]**-0.5)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
@@ -141,34 +139,33 @@ class FeedForward(nn.Module):
         return self.net(x)#out
 
 class TransformerBlock(nn.Module):
-    """ Transformer block: communication followed by computation """
 
-    def __init__(self, n_embd, n_heads):
-        # n_embd: embedding dimension, n_heads: the number of heads we'd like
+    def __init__(self, n_embd, n_heads): # 384, 6
         super().__init__()
-        #head_size = n_embd // n_heads
-        self.attn = MaskedMultiheadAttention(n_heads)
-        self.ffwd = FeedForward(n_embd)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.attention = MaskedMultiheadAttention(n_heads) # 6
+        self.mlp = FeedForward(n_embd)                     # 384
+        self.layernorm1  = nn.LayerNorm(n_embd)
+        self.layernorm2  = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        x = x + self.attn(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        x = x + self.attention(self.layernorm1(x))
+        x = x + self.mlp(self.layernorm2(x))
         return x
 
-class GPTLanguageModel(nn.Module):
+class GPT(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd) # final layer norm
+        # embeddings
+        self.token_emb_table = nn.Embedding(vocab_size, n_embd)    # (65, 384): each token has a representation of a vector of 384 values
+        self.position_emb_table = nn.Embedding(block_size, n_embd) # (10, 384): each index of the block will have also a positional representation of 384 values
+        # transformer
+        self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for _ in range(n_layer)]) # will execute sequentially n TransformerBlocks
+        self.final_layernorm = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
+        # no softmax after?
 
-        # better init, not covered in the original GPT video, but important, will cover in followup video
+        # better init
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -181,13 +178,11 @@ class GPTLanguageModel(nn.Module):
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
-
-        # idx and targets are both (B,T) tensor of integers
-        tok_emb = self.token_embedding_table(idx) # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
-        x = tok_emb + pos_emb # (B,T,C)
-        x = self.blocks(x) # (B,T,C)
-        x = self.ln_f(x) # (B,T,C)
+        token_emb = self.token_emb_table(idx) # (65, 384)[index]: meaning takes the index row in the table (65,384)
+        positional_emb = self.position_emb_table(torch.arange(T, device=device)) # T: block_size
+        x = token_emb + positional_emb # (1,384) + (1,384) -> (1,384) # for 1 index
+        x = self.transformer_blocks(x) # (1,384)
+        x = self.final_layernorm(x) # (B,T,C)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
@@ -200,36 +195,32 @@ class GPTLanguageModel(nn.Module):
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens):
-        # idx is (B, T) array of indices in the current context
+    def generate(self, index, max_new_tokens):
         for _ in range(max_new_tokens):
-            # crop idx to the last block_size tokens
-            idx_cond = idx[:, -block_size:]
-            # get the predictions
-            logits, loss = self(idx_cond)
-            # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
-            # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, C)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-        return idx
+            index_cond = index[:, -block_size:]
+            logits, loss = self(index_cond) # loss = None
+            logits = logits[:, -1, :]       # (B, C)
+            # softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)
+            # sample
+            next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            # append sampled index
+            index = torch.cat((index, next), dim=1) # (B, T+1)
+        return index
 
 # Training the model
-model = GPTLanguageModel()
+model = GPT()
 m = model.to(device)
 
 # Number of parameters in the model
 print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
-# create a PyTorch optimizer
+# Adam optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
+# Training loop
 for iter in range(max_iters):
-
-    # every once in a while evaluate the loss on train and val sets
+    # every once in a while evaluate the loss
     if iter % eval_interval == 0 or iter == max_iters - 1:
         losses = estimate_loss()
         print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
