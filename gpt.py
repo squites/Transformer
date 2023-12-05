@@ -4,13 +4,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 64#32 #4
+batch_size = 64 #32 #4
 block_size = 256 #10 #8 # sequence length
-n_embd = 384#512 #32
-n_heads = 6#8 #4 #6
+n_embd = 384 #512 #32
+n_heads = 6 #8 #4 #6
 n_layers = 6
 dropout = 0.2
-learning_rate = 3e-4
+learning_rate = 6e-4 #3e-4
 max_iterations = 5000
 eval_interval = 500
 eval_iters = 200
@@ -58,6 +58,7 @@ def get_batch(split):
     x, y = x.to(device), y.to(device)
     return x, y
 
+# estimate loss over time
 @torch.no_grad()
 def estimate_loss():
     out = {}
@@ -118,9 +119,6 @@ class MaskedMultiheadAttention(nn.Module):
 
         # reshape back # note: I'll try with permute().contiguous() following the blog, maybe this is the error
         aggregation = aggregation.transpose(-3, -2).contiguous().view(B,T,C) # (64,256,6,64)
-        #aggregation = aggregation.permute(0, 2, 1, 3).contiguous()
-        #aggregation = aggregation.view(B, T, C)  # (64,256,384)
-        #aggregation = aggregation.reshape(B,T,aggregation[-2]*aggregation[-1]) # it says to reshape() here instead of view()
         #(DEBUG) print("aggregation:", aggregation.shape)
 
         # residual connection and dropout
@@ -135,12 +133,6 @@ class FeedForward(nn.Module):
 
     def __init__(self, n_embd):
         super().__init__()
-        #self.net = nn.Sequential(
-        #    nn.Linear(n_embd, 4*n_embd), # (384, 1536)
-        #    nn.ReLU(),
-        #    nn.Linear(4*n_embd, n_embd), # (1536, 384)
-        #    nn.Dropout(dropout)
-        #)
         self.linear1 = nn.Linear(n_embd, 4*n_embd)
         self.relu = nn.ReLU()
         self.linear2 = nn.Linear(4*n_embd, n_embd)
@@ -148,8 +140,7 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         #out = self.net(x) # (64,256,384) @ (384,1536) -> (64,256,1536) @ (1536,384) -> (64,256,384)
-        x = self.linear1(x)
-        x = self.relu(x)
+        x = self.relu(self.linear1(x))
         x = self.linear2(x)
         x = self.drop(x)
         return x
@@ -177,8 +168,8 @@ class GPT(nn.Module):
     def __init__(self):
         super().__init__()
         # embeddings
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)      # (65, 384): each token has a representation of a vector of 384 values
-        self.positional_embedding_table = nn.Embedding(block_size, n_embd) # (10, 384): each index of the block will have also a positional representation of 384 values
+        self.token_emb_table = nn.Embedding(vocab_size, n_embd)      # (65, 384): each token has a representation of a vector of 384 values
+        self.positional_emb_table = nn.Embedding(block_size, n_embd) # (10, 384): each index of the block will have also a positional representation of 384 values
         # transformer
         self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for _ in range(n_layers)]) # will execute sequentially n TransformerBlocks
         self.final_layernorm = nn.LayerNorm(n_embd)
@@ -198,10 +189,10 @@ class GPT(nn.Module):
 
     def forward(self, index, targets=None):
         B,T = index.shape
-        token_embeddings = self.token_embedding_table(index) # (65, 384)[index]: meaning takes the index row in the table (65,384)
-        positional_embeddings = self.positional_embedding_table(torch.arange(T, device=device)) # T: block_size
-        emb = token_embeddings + positional_embeddings # (1,384) + (1,384) -> (1,384) # for 1 index
-        x = self.transformer_blocks(emb) # (1,384)
+        token_emb = self.token_emb_table(index) # (65, 384)[index]: meaning takes the index row in the table (65,384)
+        positional_emb = self.positional_emb_table(torch.arange(T, device=device)) # T: block_size
+        x = token_emb + positional_emb # (1,384) + (1,384) -> (1,384) # for 1 index
+        x = self.transformer_blocks(x) # (1,384)
         x = self.final_layernorm(x) # (B,T,C)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
@@ -224,7 +215,8 @@ class GPT(nn.Module):
             next = torch.multinomial(probs, num_samples=1)
             index = torch.cat((index, next), dim=1)
         return index       
-        
+
+# training the model        
 model = GPT()
 m = model.to(device)
 
