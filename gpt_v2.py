@@ -143,7 +143,7 @@ class TransformerBlock(nn.Module):
     def __init__(self, n_embd, n_heads): # 384, 6
         super().__init__()
         self.attention = MaskedMultiheadAttention(n_heads) # 6
-        self.mlp = FeedForward(n_embd)                     # 384
+        self.mlp = FeedForward(n_embd)                     # 384 # should I apply the parallelization here?
         self.layernorm1  = nn.LayerNorm(n_embd)
         self.layernorm2  = nn.LayerNorm(n_embd)
 
@@ -162,7 +162,7 @@ class GPT(nn.Module):
         # transformer
         self.transformer_blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads) for _ in range(n_layer)]) # will execute sequentially n TransformerBlocks
         self.final_layernorm = nn.LayerNorm(n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)
+        self.final_linear = nn.Linear(n_embd, vocab_size)
         # no softmax after?
 
         # better init
@@ -183,7 +183,7 @@ class GPT(nn.Module):
         x = token_emb + positional_emb # (1,384) + (1,384) -> (1,384) # for 1 index
         x = self.transformer_blocks(x) # (1,384)
         x = self.final_layernorm(x) # (B,T,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
+        logits = self.final_linear(x) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
@@ -208,6 +208,7 @@ class GPT(nn.Module):
             index = torch.cat((index, next), dim=1) # (B, T+1)
         return index
 
+# train.py
 # Training the model
 model = GPT()
 m = model.to(device)
