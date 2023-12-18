@@ -101,7 +101,7 @@ class MaskedMultiheadAttention(nn.Module):
 
         # Scaled Dot-Product attention
         # (64,6,256,64) @ (64,6,64,256) -> (64,6,256,256)
-        # the similarity in this case in being computed by a dot-product
+        # the similarity in this case in being computed by a scaled dot-product
         affinities = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) #(k.shape[-1]**-0.5)
         affinities = affinities.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         affinities = F.softmax(affinities, dim=-1)
