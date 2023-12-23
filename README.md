@@ -8,4 +8,6 @@ The main objective of this project is purely educational, so it's very basic and
 
 ## TODO
 - [x] MultiHead attention in parallel
+- [ ] Implement distributed programming operations
+- [ ] Data parallelism
 - [ ] Speed-up training
