@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.nn import functional as F
 
 
@@ -16,13 +17,24 @@ class Scatter(nn.Module):
 
 # gather tensors existing in multiple devices into one
 class Gather(nn.Module):
-    def __init__(self):
+    def __init__(self, dim, index):
+        self.dim = dim
+        self.index = index
+    
+    def forward(self, x):
+        x = torch.gather(x, self.dim, self.index)
+        return x 
     # TODO
 
 # performs a specific operation with the data held by each device and gathers the output into one device
 class Reduce(nn.Module):
-    def __init__(self):
-    # TODO
+    def __init__(self, op):
+        self.op = op # which operation to perform
+
+    def forward(self, x):
+        x = dist.reduce(x, self.op)
+        return x
+        
 
 # copies data from one device to all devices
 class Broadcast(nn.Module): 
