@@ -96,3 +96,10 @@ class DataParallelism(nn.Module):
     # calculate gradients
     # reduce
     # update model
+
+
+# instead of classes, should I implement only functions?
+
+def scatter(tensor: torch.Tensor, dim:int) -> torch.Tensor:
+    """ Scatter tensors """
+    tensor = torch.distributed.Scatter(tensor, dim)
