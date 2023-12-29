@@ -4,7 +4,12 @@ import torch.distributed as dist
 from torch.nn import functional as F
 
 
-""" Operations to apply on tensors in order to perform parallelism"""
+
+""" Operations to apply on tensors in order to perform parallelism
+	
+	* At first this library will be able to perform the simplest data paralleism on tensors, but not mixing with transformers.
+	Then this library will apply the parallelism to transformers. Maybe I'll create another repo for this.
+"""
 
 # splits several elements and scatters them on each device
 class Scatter(nn.Module):
